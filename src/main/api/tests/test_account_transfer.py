@@ -3,19 +3,175 @@
 # python -m pytest -v src/main/api/tests --alluredir=allure-results --clean-alluredir
 
 import pytest
+import random
+from typing import Tuple
 from sqlalchemy.orm import Session
+from src.main.api.classes.api_manager import ApiManager
 from src.main.api.models.create_user_request import CreateUserRequest
-from src.main.api.models.transfer_request import TransferRequest
-from src.main.api.models.deposit_request import DepositRequest
-from src.main.api.requests.create_user_requester import CreateUserRequester
-from src.main.api.requests.create_account_requester import CreateAccountRequester
-from src.main.api.requests.transfer_requester import TransferRequester
-from src.main.api.requests.deposit_requester import DepositRequester
-from src.main.api.specs.request_specs import RequestSpecs
-from src.main.api.specs.response_specs import ResponseSpecs
+from src.main.api.models.create_account_response import CreateAccountResponse
 from src.main.api.db.crud.account_crud import AccountCrudDb as Account
+from src.main.api.models.transfer_request import TransferRequest
+
+@pytest.mark.api
+class TestAccountTransfer:
+    def test_transfer_between_own_accounts(
+        self,
+        api_manager: ApiManager,
+        user_with_two_accounts: Tuple[CreateUserRequest, CreateAccountResponse, CreateAccountResponse, float, float],
+        db_session: Session
+    ) -> None:
+
+        # 1. Распаковываем данные из фикстуры
+        user, first_account, second_account, deposit_amount_1, deposit_amount_2 = user_with_two_accounts
+
+        # 2. ЦЕЛЕВАЯ СТЕПА: Переводим на второй счет ровно ту сумму, которой пополнили первый
+        response = api_manager.user_steps.transfer_amount(
+            user,
+            from_account_id=first_account.id,
+            to_account_id=second_account.id,
+            amount=deposit_amount_1
+        )
+
+        # 3. Проверки ответа API
+        assert response.fromAccountId == first_account.id, "ID счета списания не совпадает"
+        assert response.toAccountId == second_account.id, "ID счета зачисления не совпадает"
+        assert response.fromAccountIdBalance == 0.0, f"Ожидался остаток 0.0, получено {response.fromAccountIdBalance}"
+
+        # 4. Проверки в БД
+        db_first = Account.get_account_by_id(db_session, first_account.id)
+        db_second = Account.get_account_by_id(db_session, second_account.id)
+
+        assert db_first.balance == 0.0, f"Остаток на первом счете должен быть 0.0, в БД: {db_first.balance}"
+
+        expected_second_balance = round(deposit_amount_2 + deposit_amount_1, 2)
+        assert db_second.balance == expected_second_balance, f"Сумма на втором счете должна быть {expected_second_balance}, в БД: {db_second.balance}"
+
+    def test_transfer_negative_amount(
+        self,
+        api_manager: ApiManager,
+        user_with_two_accounts: Tuple[CreateUserRequest, CreateAccountResponse, CreateAccountResponse, float, float],
+        db_session: Session
+    ) -> None:
+
+        # 1. Распаковываем данные из фикстуры
+        user, first_account, second_account, deposit_amount_1, deposit_amount_2 = user_with_two_accounts
+
+        # 2. Фиксируем балансы ДО попытки перевода
+        db_first_before = Account.get_account_by_id(db_session, first_account.id)
+        db_second_before = Account.get_account_by_id(db_session, second_account.id)
+
+        # 3. Генерируем случайную отрицательную сумму
+        negative_amount = -round(random.uniform(500.0, 5000.0), 2)
+
+        # 4. Формируем запрос (обходим Pydantic-валидацию)
+        transfer_request = TransferRequest.model_construct(
+            fromAccountId=first_account.id,
+            toAccountId=second_account.id,
+            amount=negative_amount
+        )
+
+        # 5. ЦЕЛЕВАЯ СТЕПА: перевод невалидной суммы со счета на счет пользователя (ожидаем 400)
+        api_manager.user_steps.transfer_invalid_amount(user, transfer_request)
+
+        # 6. ПРОВЕРКА ЦЕЛОСТНОСТИ В БД:
+        db_session.expire_all() # # Обновляем сессию, чтобы получить актуальные данные
+
+        db_first_after = Account.get_account_by_id(db_session, first_account.id)
+        db_second_after = Account.get_account_by_id(db_session, second_account.id)
+
+        assert db_first_after.balance == db_first_before.balance, \
+            f"Баланс первого счета изменился после неудачного перевода! Было {db_first_before.balance}, стало {db_first_after.balance}"
+
+        assert db_second_after.balance == db_second_before.balance, \
+            f"Баланс второго счета изменился после неудачного перевода! Было {db_second_before.balance}, стало {db_second_after.balance}"
 
 
+
+
+""" 
+@pytest.mark.api
+class TestAccountTransfer:
+    def test_transfer_between_own_accounts(self, api_manager: ApiManager, db_session: Session) -> None:
+        # 1. Создаем пользователя
+        create_user_request = RandomModelGenerator.generate(CreateUserRequest)
+        api_manager.admin_steps.create_user(create_user_request)
+
+        # 2. Создаем первый счет и пополняем его случайной суммой
+        first_account = api_manager.user_steps.create_account(create_user_request)
+        _, deposit_amount_1 = api_manager.user_steps.deposit_random_amount(create_user_request, first_account.id)
+
+        # 3. Создаем второй счет и ТОЖЕ пополняем его случайной суммой
+        second_account = api_manager.user_steps.create_account(create_user_request)
+        _, deposit_amount_2 = api_manager.user_steps.deposit_random_amount(create_user_request, second_account.id)
+
+        # 4. Переводим на второй счет ровно ту сумму, которой пополнили первый
+        response = api_manager.user_steps.transfer_amount(
+            create_user_request,
+            from_account_id=first_account.id,
+            to_account_id=second_account.id,
+            amount=deposit_amount_1
+        )
+
+        # 5. Проверяем ответ API
+        assert response.fromAccountId == first_account.id, "ID счета списания не совпадает"
+        assert response.toAccountId == second_account.id, "ID счета зачисления не совпадает"
+        # На первом счете должно остаться 0
+        assert response.fromAccountIdBalance == 0.0, f"Ожидался остаток 0.0, получено {response.fromAccountIdBalance}"
+
+        # 6. Проверяем БД
+        db_first = Account.get_account_by_id(db_session, first_account.id)
+        db_second = Account.get_account_by_id(db_session, second_account.id)
+
+        # На первом счете 0
+        assert db_first.balance == 0.0, f"Остаток на первом счете должен быть 0.0, в БД: {db_first.balance}"
+
+        # На втором счете: изначальный баланс (deposit_amount_2) + перевод (deposit_amount_1)
+        expected_second_balance = round(deposit_amount_2 + deposit_amount_1, 2)
+        assert db_second.balance == expected_second_balance, f"Сумма на втором счете должна быть {expected_second_balance}, в БД: {db_second.balance}"
+
+    def test_transfer_negative_amount(self, api_manager: ApiManager) -> None:
+        # 1. Создаем пользователя
+        create_user_request = RandomModelGenerator.generate(CreateUserRequest)
+        api_manager.admin_steps.create_user(create_user_request)
+
+        # 2. Создаем первый счет и пополняем его случайной суммой
+        first_account = api_manager.user_steps.create_account(create_user_request)
+        _, _ = api_manager.user_steps.deposit_random_amount(create_user_request, first_account.id)
+
+        # 3. Создаем второй счет и пополняем его случайной суммой
+        second_account = api_manager.user_steps.create_account(create_user_request)
+        _, _ = api_manager.user_steps.deposit_random_amount(create_user_request, second_account.id)
+
+        # 4. Генерируем случайную отрицательную сумму
+        negative_amount = -round(random.uniform(500.0, 5000.0), 2)
+
+        # 5. Формируем запрос (обходим Pydantic-валидацию)
+        transfer_request = TransferRequest.model_construct(
+            fromAccountId=first_account.id,
+            toAccountId=second_account.id,
+            amount=negative_amount
+        )
+
+        # 6. Отправляем запрос и ожидаем 400 Bad Request
+        TransferRequester(
+            request_spec=RequestSpecs.auth_headers(
+                username=create_user_request.username,
+                password=create_user_request.password
+            ),
+            response_spec=ResponseSpecs.request_bad()
+        ).post(transfer_request)
+ """
+
+
+
+
+
+
+
+
+
+
+"""
 @pytest.mark.api
 class TestAccountTransfer:
     def test_transfer_between_own_accounts(self, db_session: Session):
@@ -112,4 +268,4 @@ class TestAccountTransfer:
         TransferRequester(
             request_spec=user_auth_spec,
             response_spec=ResponseSpecs.request_not_found()
-        ).post(transfer_request)
+        ).post(transfer_request) """

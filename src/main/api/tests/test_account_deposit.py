@@ -2,7 +2,115 @@
 # allure serve allure-results
 # python -m pytest -v src/main/api/tests --alluredir=allure-results --clean-alluredir
 
-import requests
+import pytest
+import random
+from typing import Tuple
+from sqlalchemy.orm import Session
+from src.main.api.classes.api_manager import ApiManager
+from src.main.api.models.create_user_request import CreateUserRequest
+from src.main.api.models.create_account_response import CreateAccountResponse
+from src.main.api.models.deposit_request import DepositRequest
+from src.main.api.db.crud.account_crud import AccountCrudDb as Account
+
+@pytest.mark.api
+class TestAccountDeposit:
+    def test_deposit_valid(
+        self,
+        api_manager: ApiManager,
+        user_with_account: Tuple[CreateUserRequest, CreateAccountResponse],
+        db_session: Session
+    ) -> None:
+
+        # 1. Распаковываем кортеж из фикстуры
+        user, account = user_with_account
+
+        # 2. ЦЕЛЕВАЯ СТЕПА: Пополняем счет на случайную сумму
+        response, deposit_amount = api_manager.user_steps.deposit_random_amount(
+            user, account.id
+        )
+
+        # 3. Проверки (ответ API)
+        assert response["id"] == account.id, "ID счета в ответе не совпадает"
+        assert response["balance"] == deposit_amount, f"Баланс в ответе не равен {deposit_amount}"
+
+        # 4. Проверки (БД)
+        db_account = Account.get_account_by_id(db_session, account.id)
+        assert db_account.balance == deposit_amount, f"Баланс в БД не совпадает. В БД: {db_account.balance}"
+
+    def test_deposit_invalid_account(
+            self,
+            api_manager: ApiManager,
+            user_with_account: Tuple[CreateUserRequest, CreateAccountResponse],
+            db_session: Session
+    ) -> None:
+
+        # 1. Распаковываем кортеж
+        user, _ = user_with_account
+
+        # 2. Генерируем несуществующий ID счета и валидную сумму
+        invalid_account_id = random.randint(100_000, 999_999)
+        valid_amount = round(random.uniform(1000.0, 9000.0), 2)
+
+        # 3. Формируем запрос
+        deposit_request = DepositRequest(accountId=invalid_account_id, amount=valid_amount)
+
+        # 4. ЦЕЛЕВАЯ СТЕПА: пополняем несуществующий счет (ожидает 404)
+        api_manager.user_steps.deposit_invalid_account(user, deposit_request)
+
+        # 5. Проверка целостности данных в БД:
+        db_account = Account.get_account_by_id(db_session, invalid_account_id)
+
+        assert db_account is None, f"Счет с ID {invalid_account_id} не должен существовать в БД, но он был найден"
+
+
+
+
+    """def test_deposit_valid(self, api_manager: ApiManager, db_session: Session) -> None:
+        # 1. Генерируем уникального пользователя
+        create_user_request = RandomModelGenerator.generate(CreateUserRequest)
+        api_manager.admin_steps.create_user(create_user_request)
+
+        # 2. Создаем счет
+        account = api_manager.user_steps.create_account(create_user_request)
+
+        # 3. Пополняем счет на случайную сумму
+        response, deposit_amount = api_manager.user_steps.deposit_random_amount(
+            create_user_request, account.id
+        )
+
+        # 4. Проверяем ответ API
+        assert response["id"] == account.id, "ID счета в ответе не совпадает"
+        assert response["balance"] == deposit_amount, f"Баланс в ответе не равен {deposit_amount}"
+
+        # 5. Проверяем БД
+        db_account = Account.get_account_by_id(db_session, account.id)
+        assert db_account.balance == deposit_amount, f"Баланс в БД не совпадает. В БД: {db_account.balance}"
+
+    def test_deposit_invalid_account(self, api_manager: ApiManager) -> None:
+        # 1. Генерируем уникального пользователя
+        create_user_request = RandomModelGenerator.generate(CreateUserRequest)
+
+        # 2. Создаем пользователя через админа
+        api_manager.admin_steps.create_user(create_user_request)
+
+        # 3. Генерируем несуществующий ID счета и валидную сумму
+        invalid_account_id = random.randint(100_000, 999_999)
+
+        # Сумму генерируем в рамках требований (1000-9000),
+        valid_amount = round(random.uniform(1000.0, 9000.0), 2)
+
+        # 4. Пытаемся пополнить несуществующий счет
+        deposit_request = DepositRequest(accountId=invalid_account_id, amount=valid_amount)
+
+        # 5. Ожидаем ошибку 404 Not Found
+        with pytest.raises(AssertionError):
+            api_manager.user_steps.deposit(create_user_request, deposit_request) """
+
+
+
+
+
+"""import requests
 import pytest
 
 @pytest.mark.api
@@ -157,3 +265,5 @@ class TestCreateAccount:
         )
 
         assert account_deposit_response.status_code == 404, "Сервер не вернул 404 при пополнении несуществующего счета"
+
+"""

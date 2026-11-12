@@ -11,7 +11,7 @@ from src.main.api.models.create_user_request import CreateUserRequest
 
 @pytest.mark.api
 class TestCreateAccount:
-    def test_create_account(self, db_session: Session, api_manager: ApiManager, create_user_request: CreateUserRequest):
+    def test_create_account(self, db_session: Session, api_manager: ApiManager, create_user_request: CreateUserRequest) -> None:
         response = api_manager.user_steps.create_account(create_user_request)
 
         assert response.balance == 0
